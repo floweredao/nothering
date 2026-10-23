@@ -203,6 +203,16 @@ let project = Project(
         "SKIP_INSTALL": "YES",
       ]) { $1 })
     ),
+    .target(
+      name: "NotheringProxyExtensionTests",
+      destinations: [.mac],
+      product: .unitTests,
+      bundleId: "\(bundleIDPrefix).mac.proxy.tests",
+      deploymentTargets: .macOS("15.0"),
+      // A system extension can't host tests, so its sources are compiled in, minus the entry point.
+      sources: ["MacProxy/Tests/**", .glob("MacProxy/Sources/**", excluding: ["MacProxy/Sources/main.swift"])],
+      dependencies: [.target(name: "PhoneLink"), .target(name: "ProxyCore")]
+    ),
   ],
   schemes: [
     .scheme(
