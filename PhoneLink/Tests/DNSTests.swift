@@ -18,6 +18,17 @@ private func query(_ name: String) -> Data {
     #expect(DNS.queryName(Data([0x12, 0x34])) == nil)
   }
 
+  @Test func rejectsMalformedQueries() {
+    let header: [UInt8] = [0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]
+    var noQuestion = [UInt8](query("example.com"))
+    noQuestion[5] = 0
+    #expect(DNS.queryName(Data(noQuestion)) == nil)
+    #expect(DNS.queryName(Data(header)) == nil)
+    #expect(DNS.queryName(Data(header + [5, 0x61, 0x62])) == nil) // label runs past the end
+    #expect(DNS.queryName(Data(header + [1, 0x61])) == nil) // no root label
+    #expect(DNS.queryName(Data(header + [0xC0, 0x0C, 0, 1, 0, 1])) == nil) // compression pointer
+  }
+
   @Test(arguments: [
     ("my-mac", true),
     ("my-mac.tail1234.ts.net", true),
