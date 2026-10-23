@@ -64,6 +64,12 @@ public final class LocalForwarder {
         return
       }
       queue.async { [self] in
+        // `stop` ran while this was connecting, so nothing would ever close the relay.
+        guard listener != nil else {
+          Darwin.close(client)
+          Darwin.close(upstream)
+          return
+        }
         let relay = Relay(SocketStream(fd: client, queue: queue), SocketStream(fd: upstream, queue: queue)) { [weak self] count, isUp in
           if isUp {
             self?.stats.bytesUp += UInt64(count)
