@@ -42,6 +42,37 @@ private let loopback = NWEndpoint.Host.ipv4(.loopback)
     client.cancel()
   }
 
+  @Test func relaysThroughIPv6Connect() async throws {
+    let (server, proxyPort) = try await startProxy()
+    defer { server.stop() }
+
+    // The proxy listens dual-stack, so it can be its own IPv6 destination.
+    let client = try await socksHandshake(proxyPort: proxyPort)
+    try await client.sendAsync(Data([0x05, 0x01, 0x00, 0x04] + [UInt8](repeating: 0, count: 15) + [1]) + portBytes(proxyPort))
+    #expect(try await client.receiveExactly(10)[1] == 0x00)
+
+    try await client.sendAsync(Data([0x05, 0x01, 0x00]))
+    #expect(try await client.receiveExactly(2) == Data([0x05, 0x00]))
+    client.cancel()
+  }
+
+  @Test func relaysPayloadSentWithHandshake() async throws {
+    let (echo, echoPort) = try await startEchoServer()
+    defer { echo.cancel() }
+    let (server, proxyPort) = try await startProxy()
+    defer { server.stop() }
+
+    // Greeting, request and payload in one write, before any reply.
+    let client = NWConnection(host: loopback, port: proxyPort, using: .tcp)
+    try await client.startAndWaitReady()
+    let request = Data([0x05, 0x01, 0x00, 0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1]) + portBytes(echoPort)
+    try await client.sendAsync(request + Data("early".utf8))
+    #expect(try await client.receiveExactly(2) == Data([0x05, 0x00]))
+    #expect(try await client.receiveExactly(10)[1] == 0x00)
+    #expect(try await client.receiveExactly(5) == Data("early".utf8))
+    client.cancel()
+  }
+
   @Test func relaysFramedUDP() async throws {
     let (echo, echoPort) = try await startEchoServer(using: .udp)
     defer { echo.cancel() }
@@ -112,6 +143,37 @@ private let loopback = NWEndpoint.Host.ipv4(.loopback)
     let client = try await socksHandshake(proxyPort: proxyPort)
     try await client.sendAsync(Data([0x05, 0x02, 0x00, 0x01, 127, 0, 0, 1, 0, 80]))
     #expect(try await client.receiveExactly(10)[1] == 0x07)
+    client.cancel()
+  }
+
+  @Test func refusesClientsWithoutNoAuth() async throws {
+    let (server, proxyPort) = try await startProxy()
+    defer { server.stop() }
+
+    let client = NWConnection(host: loopback, port: proxyPort, using: .tcp)
+    try await client.startAndWaitReady()
+    try await client.sendAsync(Data([0x05, 0x01, 0x02]))
+    #expect(try await client.receiveExactly(2) == Data([0x05, 0xFF]))
+    client.cancel()
+  }
+
+  @Test func rejectsUnsupportedAddressType() async throws {
+    let (server, proxyPort) = try await startProxy()
+    defer { server.stop() }
+
+    let client = try await socksHandshake(proxyPort: proxyPort)
+    try await client.sendAsync(Data([0x05, 0x01, 0x00, 0x05]))
+    #expect(try await client.receiveExactly(10)[1] == 0x08)
+    client.cancel()
+  }
+
+  @Test func rejectsDomainThatIsNotUTF8() async throws {
+    let (server, proxyPort) = try await startProxy()
+    defer { server.stop() }
+
+    let client = try await socksHandshake(proxyPort: proxyPort)
+    try await client.sendAsync(Data([0x05, 0x01, 0x00, 0x03, 0x02, 0xFF, 0xFE, 0x00, 0x50]))
+    #expect(try await client.receiveExactly(10)[1] == 0x01)
     client.cancel()
   }
 

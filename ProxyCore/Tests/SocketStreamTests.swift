@@ -35,4 +35,32 @@ import Testing
     }
     #expect(received == total)
   }
+
+  @Test func deliversBufferedBytesWhenPeerFinishes() async throws {
+    var fds: [Int32] = [0, 0]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+    defer { Darwin.close(fds[1]) }
+    let payload: [UInt8] = [1, 2, 3, 4, 5]
+    #expect(Darwin.write(fds[1], payload, payload.count) == payload.count)
+    shutdown(fds[1], SHUT_WR)
+
+    let queue = DispatchQueue(label: "SocketStreamTests")
+    let stream = SocketStream(fd: fds[0], queue: queue)
+    defer { queue.sync { stream.cancel() } }
+
+    // Asks for more than the peer sent: the short read comes back once EOF arrives, then EOF alone.
+    let reads = await withCheckedContinuation { (continuation: CheckedContinuation<[(Data?, Bool)], Never>) in
+      queue.async {
+        stream.read(minimum: 10, maximum: 10) { data, isComplete, _ in
+          stream.read(minimum: 1, maximum: 10) { next, nextIsComplete, _ in
+            continuation.resume(returning: [(data, isComplete), (next, nextIsComplete)])
+          }
+        }
+      }
+    }
+    #expect(reads[0].0 == Data(payload))
+    #expect(reads[0].1)
+    #expect(reads[1].0 == nil)
+    #expect(reads[1].1)
+  }
 }

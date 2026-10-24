@@ -67,6 +67,44 @@ import Testing
   #expect(throws: LinkError.self) { try SOCKS5.greet(fds[0]) }
 }
 
+private let boundAddresses: [[UInt8]] = [
+  [0x01, 10, 0, 0, 1, 0x1F, 0x90],
+  [0x04] + [UInt8](repeating: 0, count: 15) + [1, 0x1F, 0x90],
+  [0x03, 9] + Array("localhost".utf8) + [0x1F, 0x90],
+]
+
+/// Whatever address the proxy reports as bound, the client reads all of it and leaves relayed bytes alone.
+@Test(arguments: boundAddresses)
+func connectReadsWholeReply(boundAddress: [UInt8]) throws {
+  let (fd, proxy) = try scriptedProxy([0x05, 0x00, 0x05, 0x00, 0x00] + boundAddress + Array("data".utf8))
+  defer { [fd, proxy].forEach { close($0) } }
+  try SOCKS5.connect(fd, host: "example.com", port: 443)
+  var relayed = [UInt8](repeating: 0, count: 4)
+  #expect(read(fd, &relayed, 4) == 4)
+  #expect(relayed == Array("data".utf8))
+}
+
+@Test(arguments: [
+  [0x05, 0xFF], // no acceptable method
+  [0x05, 0x00, 0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0], // connection refused
+  [0x05, 0x00, 0x05, 0x00, 0x00, 0x09], // unknown address type
+  [0x05, 0x00, 0x05, 0x00, 0x00, 0x04, 0, 0], // closed mid-address
+] as [[UInt8]])
+func connectFailsOnBadReply(script: [UInt8]) throws {
+  let (fd, proxy) = try scriptedProxy(script)
+  defer { [fd, proxy].forEach { close($0) } }
+  #expect(throws: LinkError.self) { try SOCKS5.connect(fd, host: "example.com", port: 443) }
+}
+
+/// A socket whose proxy end has already sent `script` and half-closed, so reads past it see EOF.
+private func scriptedProxy(_ script: [UInt8]) throws -> (client: Int32, proxy: Int32) {
+  var fds: [Int32] = [0, 0]
+  guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { throw LinkError("socketpair failed") }
+  guard write(fds[1], script, script.count) == script.count else { throw LinkError("script write failed") }
+  shutdown(fds[1], SHUT_WR)
+  return (fds[0], fds[1])
+}
+
 /// Echoes one datagram at a time on 127.0.0.1 from a background thread.
 private final class UDPEcho: @unchecked Sendable {
   let port: UInt16
