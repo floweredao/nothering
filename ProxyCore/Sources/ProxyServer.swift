@@ -12,15 +12,19 @@ public final class ProxyServer {
     public var requiredInterfaceType: NWInterface.InterfaceType?
     /// Decides by the name of the local interface a client connected through (e.g. `bridge100`).
     public var isInterfaceAllowed: (String) -> Bool
+    /// How long a client gets to send its greeting and request before it is dropped.
+    public var handshakeTimeout: TimeInterval
 
     public init(
       port: NWEndpoint.Port = 11080,
       requiredInterfaceType: NWInterface.InterfaceType? = .cellular,
-      isInterfaceAllowed: @escaping (String) -> Bool = ProxyServer.isHotspotOrLoopbackInterface
+      isInterfaceAllowed: @escaping (String) -> Bool = ProxyServer.isHotspotOrLoopbackInterface,
+      handshakeTimeout: TimeInterval = 10
     ) {
       self.port = port
       self.requiredInterfaceType = requiredInterfaceType
       self.isInterfaceAllowed = isInterfaceAllowed
+      self.handshakeTimeout = handshakeTimeout
     }
   }
 
@@ -193,6 +197,11 @@ final class Session {
 
   func start() {
     readGreeting()
+    // A client that never finishes its request would otherwise hold its socket forever.
+    server.queue.asyncAfter(deadline: .now() + server.configuration.handshakeTimeout) { [weak self] in
+      guard let self, !replied, upstream == nil else { return }
+      close()
+    }
   }
 
   func close() {

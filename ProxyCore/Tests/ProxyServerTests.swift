@@ -205,6 +205,35 @@ private let loopback = NWEndpoint.Host.ipv4(.loopback)
     }
     #expect(recorded.values == ["lo0", "lo0"])
   }
+
+  /// A client that connected and stalled mid-greeting used to keep its socket and session forever.
+  @Test func dropsClientsThatNeverFinishTheHandshake() async throws {
+    let server = ProxyServer(configuration: .init(port: .any, requiredInterfaceType: nil, handshakeTimeout: 0.2))
+    let port = try await server.start()
+    defer { server.stop() }
+
+    let client = NWConnection(host: loopback, port: port, using: .tcp)
+    try await client.startAndWaitReady()
+    try await client.sendAsync(Data([0x05, 0x01]))
+    #expect(try await eventually { server.currentStats().totalConnections == 1 })
+    #expect(try await eventually { server.currentStats().activeConnections == 0 })
+    client.cancel()
+  }
+
+  @Test func keepsSessionsThatFinishedTheHandshake() async throws {
+    let server = ProxyServer(configuration: .init(port: .any, requiredInterfaceType: nil, handshakeTimeout: 0.2))
+    let port = try await server.start()
+    defer { server.stop() }
+
+    let client = try await socksHandshake(proxyPort: port)
+    try await client.sendAsync(Data([0x05, ProxyEvent.command, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
+    #expect(try await client.receiveExactly(10)[1] == 0x00)
+    try await Task.sleep(for: .milliseconds(500))
+
+    server.send(.terminating)
+    #expect(try await client.receiveExactly(1) == Data([ProxyEvent.terminating.rawValue]))
+    client.cancel()
+  }
 }
 
 private final class RecordedInterfaces: @unchecked Sendable {
