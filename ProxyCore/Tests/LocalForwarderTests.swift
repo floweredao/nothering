@@ -37,6 +37,52 @@ import Testing
     #expect(reply == nil || reply?.isEmpty == true)
     client.cancel()
   }
+
+  /// A client still waiting for its upstream when the forwarder stops used to start relaying anyway.
+  @Test func dropsClientsStillConnectingWhenStopped() async throws {
+    let (echo, echoPort) = try await startEchoServer()
+    defer { echo.cancel() }
+    let upstream = BlockedUpstream()
+    let forwarder = LocalForwarder(port: 0) {
+      upstream.waitForRelease()
+      return try connectTCP(port: echoPort.rawValue)
+    }
+    let port = try forwarder.start()
+
+    let client = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    try await client.startAndWaitReady()
+    try await client.sendAsync(Data("x".utf8))
+    let deadline = ContinuousClock.now + .seconds(2)
+    while !upstream.isWaiting, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(upstream.isWaiting)
+
+    forwarder.stop()
+    upstream.release()
+    let reply = try? await client.receiveExactly(1)
+    #expect(reply == nil || reply?.isEmpty == true)
+    #expect(forwarder.currentStats().activeConnections == 0)
+    client.cancel()
+  }
+}
+
+/// Holds `connectUpstream` until the test releases it.
+private final class BlockedUpstream: @unchecked Sendable {
+  private let lock = NSLock()
+  private let semaphore = DispatchSemaphore(value: 0)
+  private var waiting = false
+
+  var isWaiting: Bool { lock.withLock { waiting } }
+
+  func waitForRelease() {
+    lock.withLock { waiting = true }
+    semaphore.wait()
+  }
+
+  func release() {
+    semaphore.signal()
+  }
 }
 
 private func connectTCP(port: UInt16) throws -> Int32 {

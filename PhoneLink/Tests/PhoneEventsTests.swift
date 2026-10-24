@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import PhoneLink
 import ProxyCore
@@ -115,4 +116,43 @@ import Testing
     newLink.send(.terminating)
     #expect(await iterator.next() == .event(.terminating))
   }
+
+  /// A `stop` while the link was still connecting used to be lost: the stream opened on the old link
+  /// anyway and, never ending, kept `listen` from moving to the new one.
+  @Test func abandonsAStreamStoppedWhileConnecting() throws {
+    var fds: [Int32] = [0, 0]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+    let (phone, proxy) = (fds[0], fds[1])
+    defer { close(proxy) }
+    // The proxy's replies to the greeting and the event request, sent ahead of time.
+    let replies: [UInt8] = [0x05, 0x00, 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]
+    #expect(write(proxy, replies, replies.count) == replies.count)
+    var timeout = timeval(tv_sec: 2, tv_usec: 0)
+    setsockopt(proxy, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+    let connecting = DispatchSemaphore(value: 0)
+    let connected = DispatchSemaphore(value: 0)
+    let updates = RecordedUpdates()
+    let listener = PhoneEventListener()
+    listener.listen(connect: {
+      connecting.signal()
+      connected.wait()
+      return phone
+    }) { updates.append($0) }
+    connecting.wait()
+    listener.stop()
+    connected.signal()
+
+    // Closed without a greeting, rather than greeted and held open.
+    var greeting = [UInt8](repeating: 0, count: 3)
+    #expect(read(proxy, &greeting, greeting.count) == 0)
+    #expect(updates.values.isEmpty)
+  }
+}
+
+private final class RecordedUpdates: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [PhoneEventListener.Update] = []
+  var values: [PhoneEventListener.Update] { lock.withLock { storage } }
+  func append(_ value: PhoneEventListener.Update) { lock.withLock { storage.append(value) } }
 }

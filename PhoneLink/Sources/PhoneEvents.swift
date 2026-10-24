@@ -20,6 +20,7 @@ public final class PhoneEventListener: @unchecked Sendable {
 
   private let lock = NSLock()
   private var isListening = false
+  private var isStopped = false
   private var socket: Int32?
 
   public init() {}
@@ -27,9 +28,11 @@ public final class PhoneEventListener: @unchecked Sendable {
   /// Opens a stream unless one is open already. Does nothing more when the phone's app predates
   /// events; the caller can try again later.
   public func listen(connect: @escaping @Sendable () throws -> Int32, onUpdate: @escaping @Sendable (Update) -> Void) {
-    let shouldStart = lock.withLock {
-      defer { isListening = true }
-      return !isListening
+    let shouldStart: Bool = lock.withLock {
+      guard !isListening else { return false }
+      isListening = true
+      isStopped = false
+      return true
     }
     guard shouldStart else { return }
     DispatchQueue.global().async { [self] in
@@ -43,6 +46,7 @@ public final class PhoneEventListener: @unchecked Sendable {
   /// the caller stops the stream whenever the link it was opened on is no longer the current one.
   public func stop() {
     lock.withLock {
+      isStopped = true
       if let socket { shutdown(socket, SHUT_RDWR) }
     }
   }
@@ -50,11 +54,15 @@ public final class PhoneEventListener: @unchecked Sendable {
   /// Returns whether the stream was open before it ended.
   private func stream(connect: () throws -> Int32, onUpdate: (Update) -> Void) -> Bool {
     guard let fd = try? connect() else { return false }
-    lock.withLock { socket = fd }
-    defer {
-      lock.withLock { socket = nil }
-      close(fd)
+    defer { close(fd) }
+    // A `stop` while connecting had no socket to shut down, so the stream would open on a link the
+    // caller already left and block the next `listen` for good.
+    let wasStopped: Bool = lock.withLock {
+      if !isStopped { socket = fd }
+      return isStopped
     }
+    guard !wasStopped else { return false }
+    defer { lock.withLock { socket = nil } }
     guard (try? SOCKS5.openEventStream(fd)) != nil else { return false }
     onUpdate(.opened)
     while let byte = try? SOCKS5.readEvent(fd) {
