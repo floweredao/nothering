@@ -16,12 +16,16 @@ final class DatagramRelay {
   private static let maxUnconfirmed = 32
   /// Bounds those datagrams across all peers, which could otherwise reach 512 MB per session.
   private static let maxUnconfirmedBytes = 64 * 1024
+  /// Frames waiting to be written to a client that reads slower than its peers send. Beyond this,
+  /// datagrams are dropped like a full socket buffer would.
+  private static let maxPendingWriteBytes = 256 * 1024
 
   private let client: ByteStream
   private unowned let server: ProxyServer
   private let onClose: () -> Void
   private var peers: [Peer: NWConnection] = [:]
   private var unconfirmed: [Peer: [Data]] = [:]
+  private var pendingWriteBytes = 0
   private var closed = false
 
   init(client: ByteStream, server: ProxyServer, onClose: @escaping () -> Void) {
@@ -122,9 +126,12 @@ final class DatagramRelay {
   private func receive(from connection: NWConnection, peer: Peer) {
     connection.receiveMessage { [weak self] data, _, _, error in
       guard let self, !closed, peers[peer] === connection else { return }
-      if let data, !data.isEmpty, let frame = DatagramFrame.encode(data, host: peer.host, port: peer.port) {
+      if let data, !data.isEmpty, let frame = DatagramFrame.encode(data, host: peer.host, port: peer.port),
+         pendingWriteBytes + frame.count <= Self.maxPendingWriteBytes {
         server.record(bytes: data.count, upstream: false)
+        pendingWriteBytes += frame.count
         client.write(frame) { [weak self] error in
+          self?.pendingWriteBytes -= frame.count
           if error != nil { self?.onClose() }
         }
       }

@@ -28,6 +28,39 @@ import Testing
     #expect(kept > 0)
     #expect(kept <= 64 * 1024)
   }
+
+  /// Replies for a client that stopped reading used to pile up in memory for as long as peers sent.
+  @Test func dropsDatagramsWhileTheClientIsBackedUp() async throws {
+    let (echo, echoPort) = try await startEchoServer(using: .udp)
+    defer { echo.cancel() }
+    let server = ProxyServer(configuration: .init(port: .any, requiredInterfaceType: nil))
+    var frames = Data()
+    for _ in 0..<64 {
+      let frame = try #require(DatagramFrame.encode(Data(count: 8000), host: .ipv4(.loopback), port: echoPort))
+      frames += frame
+    }
+    let client = ScriptedStream(frames)
+    let relay = DatagramRelay(client: client, server: server) {}
+    server.queue.sync { relay.start() }
+    defer { server.queue.sync { relay.close() } }
+
+    func backlog() -> Int {
+      server.queue.sync { client.pendingWriteBytes }
+    }
+    // Unbounded, all 64 echoes end up queued; bounded, this waits out the deadline.
+    _ = try await waitUntil { backlog() >= 64 * 8000 }
+    #expect(backlog() > 0)
+    #expect(backlog() <= 256 * 1024)
+  }
+}
+
+private func waitUntil(_ condition: () -> Bool) async throws -> Bool {
+  let deadline = ContinuousClock.now + .seconds(2)
+  while !condition() {
+    guard ContinuousClock.now < deadline else { return false }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  return true
 }
 
 /// Hands the reader `input` as fast as it asks, then nothing more. Writes are counted and never
