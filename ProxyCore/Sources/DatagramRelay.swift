@@ -14,6 +14,8 @@ final class DatagramRelay {
   private static let maxPeers = 256
   /// Datagrams kept per peer until its connection is ready, to resend if it falls back to NAT64.
   private static let maxUnconfirmed = 32
+  /// Bounds those datagrams across all peers, which could otherwise reach 512 MB per session.
+  private static let maxUnconfirmedBytes = 64 * 1024
 
   private let client: ByteStream
   private unowned let server: ProxyServer
@@ -51,12 +53,24 @@ final class DatagramRelay {
         let peer = Peer(host: frame.host, port: frame.port)
         let connection = peers[peer] ?? open(peer, via: peer.host)
         connection.send(content: frame.payload, completion: .contentProcessed { _ in })
-        if connection.state != .ready, unconfirmed[peer, default: []].count < Self.maxUnconfirmed {
+        if connection.state != .ready, unconfirmed[peer, default: []].count < Self.maxUnconfirmed,
+           unconfirmedBytes + frame.payload.count <= Self.maxUnconfirmedBytes {
           unconfirmed[peer, default: []].append(frame.payload)
         }
         readFrame()
       }
     }
+  }
+
+  /// Bytes kept in `unconfirmed`.
+  var unconfirmedBytes: Int {
+    var total = 0
+    for payloads in unconfirmed.values {
+      for payload in payloads {
+        total += payload.count
+      }
+    }
+    return total
   }
 
   private func read(_ count: Int, _ completion: @escaping ([UInt8]) -> Void) {
