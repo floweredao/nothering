@@ -1,17 +1,17 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**.md', 'LICENSE']
   pull_request:
     branches: [main]
     paths-ignore: ['**.md', 'LICENSE']
 
-# A new push to a PR supersedes its in-flight run. Pushes to main always finish.
+# A new push to a PR supersedes its in-flight run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   # Index-while-building only feeds the editor, so skip it on CI.
@@ -21,6 +21,7 @@ jobs:
   mac:
     name: Mac (build + test)
     runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -60,6 +61,7 @@ jobs:
   ios:
     name: iOS (build)
     runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
