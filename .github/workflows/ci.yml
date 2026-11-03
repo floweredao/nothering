@@ -20,13 +20,21 @@ env:
 jobs:
   mac:
     name: Mac (build + test) and iOS (build)
-    # macOS arm64 hosted runners are capacity-limited (jobs were cancelled unacquired); deployment targets are macOS 15 / iOS 18.
+    # macOS arm64 hosted runners are capacity-limited (jobs were cancelled unacquired); the image's Xcode 26 builds the macOS 15 / iOS 18 targets.
     runs-on: macos-15-intel
     timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The app icons are Xcode 26 icon sets, which Xcode 16 (the image default) cannot compile.
+      - name: Select Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          test -n "$xcode"
+          echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
+          "$xcode/Contents/Developer/usr/bin/xcodebuild" -version
 
       # Installs the Tuist version pinned in mise.toml, keeping CI and local dev
       # in sync. Not Homebrew: the tuist tap's cask declares `conflicts_with
