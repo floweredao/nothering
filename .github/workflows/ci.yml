@@ -20,8 +20,7 @@ env:
 jobs:
   mac:
     name: Mac (build + test) and iOS (build)
-    # macOS arm64 hosted runners are capacity-limited (jobs were cancelled unacquired); the image's Xcode 26 builds the macOS 15 / iOS 18 targets.
-    runs-on: macos-15-intel
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
